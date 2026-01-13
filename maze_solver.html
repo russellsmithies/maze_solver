@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maze Generator and Solver</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            min-height: 100vh;
+            color: #1f2937;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 2px solid #e5e7eb;
+            background-color: #ffffff;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .message-box {
+            min-height: 24px;
+            margin-top: 16px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-3xl font-bold mb-4">Maze Generator and Solver</h1>
+        <div class="flex flex-col sm:flex-row gap-4 mb-4 items-center">
+            <div class="flex items-center gap-2">
+                <label for="width" class="font-medium text-gray-700">Width:</label>
+                <input type="number" id="width" value="101" min="5" step="2" class="p-2 border border-gray-300 rounded-md w-24 text-center">
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="height" class="font-medium text-gray-700">Height:</label>
+                <input type="number" id="height" value="101" min="5" step="2" class="p-2 border border-gray-300 rounded-md w-24 text-center">
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="algorithm" class="font-medium text-gray-700">Solver:</label>
+                <select id="algorithm" class="p-2 border border-gray-300 rounded-md">
+                    <option value="dfs">Depth-First Search</option>
+                    <option value="astar">A* Search</option>
+                    <option value="bfs">Breadth-First Search</option>
+                    <option value="dijkstra">Dijkstra's Algorithm</option>
+                    <option value="greedy">Greedy Best-First Search</option>
+                </select>
+            </div>
+            <button id="generateBtn" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-full shadow-lg hover:bg-blue-700 transition duration-300 ease-in-out">
+                Generate Maze
+            </button>
+            <button id="startBtn" class="bg-green-600 text-white font-semibold py-2 px-4 rounded-full shadow-lg hover:bg-green-700 transition duration-300 ease-in-out hidden">
+                Start Solving
+            </button>
+            <button id="stopBtn" class="bg-red-600 text-white font-semibold py-2 px-4 rounded-full shadow-lg hover:bg-red-700 transition duration-300 ease-in-out hidden">
+                Stop
+            </button>
+            <button id="fullscreenBtn" class="bg-indigo-600 text-white font-semibold py-2 px-4 rounded-full shadow-lg hover:bg-indigo-700 transition duration-300 ease-in-out">
+                Full Screen
+            </button>
+        </div>
+        <div class="text-sm text-gray-600 mb-2">
+            Animation Colors: <span class="text-purple-600 font-bold">Explored Cells</span>, 
+            <span class="text-orange-400 font-bold">Open Set</span>, 
+            <span class="text-cyan-500 font-bold">Final Path</span>
+        </div>
+        <div id="messageBox" class="message-box text-red-500"></div>
+        <canvas id="mazeCanvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mazeCanvas');
+        const ctx = canvas.getContext('2d');
+        const widthInput = document.getElementById('width');
+        const heightInput = document.getElementById('height');
+        const algorithmSelect = document.getElementById('algorithm');
+        const generateBtn = document.getElementById('generateBtn');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+        const messageBox = document.getElementById('messageBox');
+
+        let mazeWidth, mazeHeight;
+        let mazeGrid;
+        let cellSize;
+        let animationFrameId = null;
+        let isAnimating = false;
+        let solverState = null;
+        
+        // This constant controls how many algorithm steps are processed per animation frame.
+        const BATCH_SIZE = 50;
+        
+        // This will hold the solved state permanently after the animation completes
+        let solvedStateData = { path: null, visited: null, openSet: null };
+
+        // Set initial canvas size
+        function resizeCanvas() {
+            canvas.width = Math.min(800, window.innerWidth - 40);
+            canvas.height = canvas.width;
+        }
+        
+        // Updates the button text based on fullscreen state
+        function updateFullscreenButtonText() {
+            if (document.fullscreenElement) {
+                fullscreenBtn.textContent = 'Exit Full Screen';
+            } else {
+                fullscreenBtn.textContent = 'Full Screen';
+            }
+        }
+
+        // Handles resizing the canvas when entering/exiting full screen
+        function handleFullscreenChange() {
+            if (document.fullscreenElement) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            } else {
+                resizeCanvas();
+            }
+            if (mazeGrid) {
+                cellSize = Math.floor(Math.min(canvas.width / mazeWidth, canvas.height / mazeHeight));
+                if (cellSize < 1) {
+                    showMessage("Maze dimensions are too large for the canvas in full screen. Please reduce the size to display correctly.", true);
+                    return;
+                }
+                // Redraw using the saved final state, if it exists
+                if (solvedStateData.path) {
+                    drawMaze(mazeGrid, solvedStateData.path, solvedStateData.visited, solvedStateData.openSet);
+                } else if (solverState) {
+                    drawMaze(mazeGrid, solverState.path, solverState.visited, solverState.openSet);
+                } else {
+                    drawMaze(mazeGrid, null, null, null);
+                }
+            }
+            updateFullscreenButtonText();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        resizeCanvas();
+
+        generateBtn.addEventListener('click', () => {
+            stopAnimation();
+            resetSolverState();
+            generateAndDraw();
+        });
+
+        startBtn.addEventListener('click', startSolving);
+
+        stopBtn.addEventListener('click', () => {
+             stopAnimation();
+             showMessage("Animation stopped.", false);
+        });
+
+        fullscreenBtn.addEventListener('click', () => {
+            if (document.fullscreenElement) {
+                // If already in fullscreen, exit
+                document.exitFullscreen();
+            } else if (document.body.requestFullscreen) {
+                // Otherwise, request fullscreen
+                document.body.requestFullscreen();
+            } else {
+                showMessage("Full screen is not supported on this browser.", true);
+            }
+        });
+
+        function showMessage(message, isError = false) {
+            messageBox.textContent = message;
+            messageBox.style.color = isError ? '#ef4444' : '#10b981';
+        }
+
+        function setButtonState(state) {
+            if (state === 'generating') {
+                generateBtn.disabled = true;
+                generateBtn.classList.add('hidden');
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else if (state === 'ready') {
+                generateBtn.disabled = false;
+                generateBtn.classList.remove('hidden');
+                startBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+            } else if (state === 'solving') {
+                generateBtn.disabled = true;
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+            } else { // 'initial' or 'stopped'
+                generateBtn.disabled = false;
+                generateBtn.classList.remove('hidden');
+                startBtn.classList.add('hidden');
+                stopBtn.classList.add('hidden');
+            }
+        }
+        
+        function resetSolverState() {
+             solverState = null;
+             solvedStateData = { path: null, visited: null, openSet: null };
+        }
+
+        function generateAndDraw() {
+            mazeWidth = parseInt(widthInput.value);
+            mazeHeight = parseInt(heightInput.value);
+
+            if (isNaN(mazeWidth) || isNaN(mazeHeight) || mazeWidth < 5 || mazeHeight < 5 || mazeWidth % 2 === 0 || mazeHeight % 2 === 0) {
+                showMessage("Dimensions must be odd numbers and at least 5.", true);
+                return;
+            }
+
+            const proposedCellSize = Math.floor(canvas.width / mazeWidth);
+            if (proposedCellSize < 1) {
+                showMessage("Maze dimensions are too large for the canvas. Please reduce the size to display correctly.", true);
+                return;
+            }
+
+            showMessage("Generating maze...", false);
+            setButtonState('generating');
+
+            cellSize = proposedCellSize;
+            canvas.height = cellSize * mazeHeight;
+            mazeGrid = generateMaze(mazeWidth, mazeHeight);
+
+            stopAnimation();
+            drawMaze(mazeGrid, null); // Draw the initial maze
+
+            showMessage("Maze generated. Click 'Start Solving' to begin.", false);
+            setButtonState('ready');
+        }
+
+        function startSolving() {
+            if (isAnimating) {
+                return;
+            }
+            if (!mazeGrid) {
+                showMessage("Please generate a maze first.", true);
+                return;
+            }
+
+            showMessage("Solving maze...", false);
+            setButtonState('solving');
+            isAnimating = true;
+            
+            const algorithm = algorithmSelect.value;
+            const startTime = performance.now();
+            solverState = initializeSolver(mazeGrid, algorithm);
+            let done = false;
+            
+            function animateSolve() {
+                try {
+                    for (let i = 0; i < BATCH_SIZE && !done; i++) {
+                        const result = stepSolver(solverState, algorithm);
+                        done = result.done;
+                        if (result.path) {
+                            solverState.path = result.path;
+                        }
+                    }
+                    
+                    drawMaze(mazeGrid, solverState.path, solverState.visited, solverState.openSet);
+
+                    if (!done) {
+                         animationFrameId = setTimeout(animateSolve, 10);
+                    } else {
+                        // Capture the final state for permanent storage
+                        solvedStateData.path = solverState.path;
+                        solvedStateData.visited = solverState.visited;
+                        solvedStateData.openSet = solverState.openSet;
+
+                        drawMaze(mazeGrid, solvedStateData.path, solvedStateData.visited, solvedStateData.openSet);
+                        const endTime = performance.now();
+                        const solveTime = (endTime - startTime).toFixed(2);
+                        showMessage(`Done! Solved in ${solveTime}ms.`, false);
+                        stopAnimation();
+                    }
+                } catch (error) {
+                    showMessage(`An error occurred during animation: ${error.message}`, true);
+                    console.error(error);
+                    stopAnimation();
+                }
+            }
+            
+            animationFrameId = setTimeout(animateSolve, 10);
+        }
+
+        function stopAnimation() {
+            if (animationFrameId) {
+                clearTimeout(animationFrameId);
+                animationFrameId = null;
+            }
+            isAnimating = false;
+            setButtonState('ready');
+        }
+
+        // MAZE GENERATION (Recursive Backtracking)
+        function generateMaze(width, height) {
+            const maze = Array.from({ length: height }, () => Array(width).fill('W'));
+            const stack = [];
+            const visited = new Set();
+
+            const startRow = 1;
+            const startCol = 1;
+
+            stack.push([startRow, startCol]);
+            visited.add(`${startRow},${startCol}`);
+
+            while (stack.length > 0) {
+                const [currentRow, currentCol] = stack[stack.length - 1];
+                maze[currentRow][currentCol] = 'P';
+
+                const unvisitedNeighbors = [];
+                const directions = [[-2, 0], [2, 0], [0, -2], [0, 2]];
+
+                for (const [dr, dc] of directions) {
+                    const neighborRow = currentRow + dr;
+                    const neighborCol = currentCol + dc;
+                    if (neighborRow > 0 && neighborRow < height - 1 && neighborCol > 0 && neighborCol < width - 1) {
+                        if (!visited.has(`${neighborRow},${neighborCol}`)) {
+                            unvisitedNeighbors.push([neighborRow, neighborCol]);
+                        }
+                    }
+                }
+
+                if (unvisitedNeighbors.length > 0) {
+                    const [nextRow, nextCol] = unvisitedNeighbors[Math.floor(Math.random() * unvisitedNeighbors.length)];
+                    const wallRow = (currentRow + nextRow) / 2;
+                    const wallCol = (currentCol + nextCol) / 2;
+
+                    maze[wallRow][wallCol] = 'P';
+                    visited.add(`${nextRow},${nextCol}`);
+                    stack.push([nextRow, nextCol]);
+                } else {
+                    stack.pop();
+                }
+            }
+            
+            // Set start and end points with perimeter openings
+            maze[1][0] = 'S';
+            maze[height - 2][width - 1] = 'E';
+
+            return maze;
+        }
+
+        // SOLVER INITIALIZATION AND STEPPING
+        function initializeSolver(maze, algorithm) {
+            const startPos = findCharPosition(maze, 'S');
+            const endPos = findCharPosition(maze, 'E');
+
+            if (!startPos || !endPos) {
+                return null;
+            }
+
+            if (algorithm === 'dfs') {
+                return {
+                    stack: [[startPos, [startPos]]],
+                    visited: new Set([`${startPos[0]},${startPos[1]}`]),
+                    endPos: endPos,
+                    path: null // Initialize path
+                };
+            } else if (algorithm === 'astar') {
+                const startKey = `${startPos[0]},${startPos[1]}`;
+                const endKey = `${endPos[0]},${endPos[1]}`;
+                const openSet = new Map();
+                const cameFrom = new Map();
+                const gScore = new Map();
+                const fScore = new Map();
+                const visited = new Set([startKey]);
+                openSet.set(startKey, { pos: startPos, f: heuristic(startPos, endPos) });
+                gScore.set(startKey, 0);
+                fScore.set(startKey, heuristic(startPos, endPos));
+                return {
+                    openSet: openSet,
+                    cameFrom: cameFrom,
+                    gScore: gScore,
+                    fScore: fScore,
+                    visited: visited,
+                    endPos: endPos,
+                    path: null // Initialize path
+                };
+            } else if (algorithm === 'bfs') {
+                return {
+                    queue: [[startPos, [startPos]]],
+                    visited: new Set([`${startPos[0]},${startPos[1]}`]),
+                    endPos: endPos,
+                    path: null // Initialize path
+                };
+            } else if (algorithm === 'dijkstra') {
+                const startKey = `${startPos[0]},${startPos[1]}`;
+                const endKey = `${endPos[0]},${endPos[1]}`;
+                const openSet = new Map();
+                const cameFrom = new Map();
+                const distance = new Map();
+                const visited = new Set([startKey]);
+                openSet.set(startKey, { pos: startPos, dist: 0 });
+                distance.set(startKey, 0);
+                return {
+                    openSet: openSet,
+                    cameFrom: cameFrom,
+                    distance: distance,
+                    visited: visited,
+                    endPos: endPos,
+                    path: null // Initialize path
+                };
+            } else if (algorithm === 'greedy') {
+                const startKey = `${startPos[0]},${startPos[1]}`;
+                const endKey = `${endPos[0]},${endPos[1]}`;
+                const openSet = new Map();
+                const cameFrom = new Map();
+                const visited = new Set([startKey]);
+                openSet.set(startKey, { pos: startPos, f: heuristic(startPos, endPos) });
+                return {
+                    openSet: openSet,
+                    cameFrom: cameFrom,
+                    visited: visited,
+                    endPos: endPos,
+                    path: null
+                };
+            }
+            return null;
+        }
+
+        function stepSolver(state, algorithm) {
+            const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+            if (algorithm === 'dfs') {
+                if (state.stack.length > 0) {
+                    const [currentPos, currentPath] = state.stack.pop();
+                    const [row, col] = currentPos;
+
+                    if (row === state.endPos[0] && col === state.endPos[1]) {
+                        return { path: currentPath, visited: state.visited, done: true, openSet: null };
+                    }
+
+                    for (const [dr, dc] of directions) {
+                        const nextRow = row + dr;
+                        const nextCol = col + dc;
+                        
+                        if (nextRow >= 0 && nextRow < mazeHeight && nextCol >= 0 && nextCol < mazeWidth) {
+                            const nextCell = mazeGrid[nextRow][nextCol];
+                            const nextPosKey = `${nextRow},${nextCol}`;
+
+                            if (nextCell !== 'W' && !state.visited.has(nextPosKey)) {
+                                state.visited.add(nextPosKey);
+                                const newPath = [...currentPath, [nextRow, nextCol]];
+                                state.stack.push([[nextRow, nextCol], newPath]);
+                            }
+                        }
+                    }
+                    return { path: currentPath, visited: state.visited, done: false, openSet: null };
+                }
+                return { path: null, visited: state.visited, done: true, openSet: null };
+            } else if (algorithm === 'bfs') {
+                if (state.queue.length > 0) {
+                    const [currentPos, currentPath] = state.queue.shift();
+                    const [row, col] = currentPos;
+
+                    if (row === state.endPos[0] && col === state.endPos[1]) {
+                        return { path: currentPath, visited: state.visited, done: true, openSet: null };
+                    }
+
+                    for (const [dr, dc] of directions) {
+                        const nextRow = row + dr;
+                        const nextCol = col + dc;
+                        const nextPosKey = `${nextRow},${nextCol}`;
+
+                        if (nextRow >= 0 && nextRow < mazeHeight && nextCol >= 0 && nextCol < mazeWidth) {
+                            const nextCell = mazeGrid[nextRow][nextCol];
+                            if (nextCell !== 'W' && !state.visited.has(nextPosKey)) {
+                                state.visited.add(nextPosKey);
+                                const newPath = [...currentPath, [nextRow, nextCol]];
+                                state.queue.push([[nextRow, nextCol], newPath]);
+                            }
+                        }
+                    }
+                    return { path: currentPath, visited: state.visited, done: false, openSet: null };
+                }
+                return { path: null, visited: state.visited, done: true, openSet: null };
+            } else if (algorithm === 'dijkstra') {
+                if (state.openSet.size === 0) {
+                    return { path: null, visited: state.visited, openSet: null, done: true };
+                }
+                let currentKey = null;
+                let minDistance = Infinity;
+                for (const [key, value] of state.openSet.entries()) {
+                    if (value.dist < minDistance) {
+                        minDistance = value.dist;
+                        currentKey = key;
+                    }
+                }
+                
+                if (!currentKey) {
+                    return { path: null, visited: state.visited, openSet: null, done: true };
+                }
+
+                if (currentKey === `${state.endPos[0]},${state.endPos[1]}`) {
+                    const path = reconstructPath(state.cameFrom, currentKey);
+                    return { path: path, visited: state.visited, openSet: null, done: true };
+                }
+
+                const currentNode = state.openSet.get(currentKey);
+                state.openSet.delete(currentKey);
+                state.visited.add(currentKey);
+
+                const [row, col] = currentNode.pos;
+
+                for (const [dr, dc] of directions) {
+                    const neighborRow = row + dr;
+                    const neighborCol = col + dc;
+                    const neighborKey = `${neighborRow},${neighborCol}`;
+
+                    if (neighborRow >= 0 && neighborRow < mazeHeight && neighborCol >= 0 && neighborCol < mazeWidth) {
+                        const nextCell = mazeGrid[neighborRow][neighborCol];
+                        if (nextCell === 'W') { continue; }
+                        
+                        // Only process neighbors that haven't been visited yet
+                        if (state.visited.has(neighborKey)) { continue; }
+                        
+                        const tentativeDistance = state.distance.get(currentKey) + 1;
+
+                        if (tentativeDistance < (state.distance.get(neighborKey) || Infinity)) {
+                            state.cameFrom.set(neighborKey, currentKey);
+                            state.distance.set(neighborKey, tentativeDistance);
+                            state.openSet.set(neighborKey, { pos: [neighborRow, neighborCol], dist: tentativeDistance });
+                        }
+                    }
+                }
+                const currentPath = reconstructPath(state.cameFrom, currentKey);
+                return { path: currentPath, visited: state.visited, openSet: state.openSet, done: false };
+            } else if (algorithm === 'astar') {
+                if (state.openSet.size === 0) {
+                    return { path: null, visited: state.visited, openSet: null, done: true };
+                }
+                let currentKey = null;
+                let minFScore = Infinity;
+                for (const [key, value] of state.openSet.entries()) {
+                    if (value.f < minFScore) {
+                        minFScore = value.f;
+                        currentKey = key;
+                    }
+                }
+                
+                if (!currentKey) {
+                    return { path: null, visited: state.visited, openSet: null, done: true };
+                }
+
+                if (currentKey === `${state.endPos[0]},${state.endPos[1]}`) {
+                    const path = reconstructPath(state.cameFrom, currentKey);
+                    return { path: path, openSet: null, visited: state.visited, done: true };
+                }
+
+                const currentNode = state.openSet.get(currentKey);
+                state.openSet.delete(currentKey);
+                state.visited.add(currentKey);
+
+                const [row, col] = currentNode.pos;
+                for (const [dr, dc] of directions) {
+                    const neighborRow = row + dr;
+                    const neighborCol = col + dc;
+                    const neighborKey = `${neighborRow},${neighborCol}`;
+
+                    if (neighborRow >= 0 && neighborRow < mazeHeight && neighborCol >= 0 && neighborCol < mazeWidth) {
+                        const nextCell = mazeGrid[neighborRow][neighborCol];
+                        if (nextCell === 'W') { continue; }
+                        
+                        // Only process neighbors that haven't been visited yet
+                        if (state.visited.has(neighborKey)) { continue; }
+                        
+                        const tentativeGScore = state.gScore.get(currentKey) + 1;
+
+                        if (tentativeGScore < (state.gScore.get(neighborKey) || Infinity)) {
+                            state.cameFrom.set(neighborKey, currentKey);
+                            state.gScore.set(neighborKey, tentativeGScore);
+                            state.fScore.set(neighborKey, tentativeGScore + heuristic([neighborRow, neighborCol], state.endPos));
+                            if (!state.openSet.has(neighborKey)) {
+                                state.openSet.set(neighborKey, { pos: [neighborRow, neighborCol], f: state.fScore.get(neighborKey) });
+                            }
+                        }
+                    }
+                }
+                const currentPath = reconstructPath(state.cameFrom, currentKey);
+                return { path: currentPath, visited: state.visited, openSet: state.openSet, done: false };
+            } else if (algorithm === 'greedy') {
+                if (state.openSet.size === 0) {
+                    return { path: null, visited: state.visited, openSet: null, done: true };
+                }
+                let currentKey = null;
+                let minFScore = Infinity;
+                for (const [key, value] of state.openSet.entries()) {
+                    if (value.f < minFScore) {
+                        minFScore = value.f;
+                        currentKey = key;
+                    }
+                }
+
+                if (currentKey === `${state.endPos[0]},${state.endPos[1]}`) {
+                    const path = reconstructPath(state.cameFrom, currentKey);
+                    return { path: path, visited: state.visited, openSet: null, done: true };
+                }
+
+                const currentNode = state.openSet.get(currentKey);
+                state.openSet.delete(currentKey);
+                state.visited.add(currentKey);
+
+                const [row, col] = currentNode.pos;
+                for (const [dr, dc] of directions) {
+                    const neighborRow = row + dr;
+                    const neighborCol = col + dc;
+                    const neighborKey = `${neighborRow},${neighborCol}`;
+                    
+                    if (neighborRow >= 0 && neighborRow < mazeHeight && neighborCol >= 0 && neighborCol < mazeWidth) {
+                        const nextCell = mazeGrid[neighborRow][neighborCol];
+                        if (nextCell === 'W') { continue; }
+                        
+                        if (!state.visited.has(neighborKey)) {
+                            state.cameFrom.set(neighborKey, currentKey);
+                            state.visited.add(neighborKey);
+                            state.openSet.set(neighborKey, { pos: [neighborRow, neighborCol], f: heuristic([neighborRow, neighborCol], state.endPos) });
+                        }
+                    }
+                }
+                return { path: null, visited: state.visited, openSet: state.openSet, done: false };
+            }
+            return { path: null, visited: null, openSet: null, done: true };
+        }
+
+        // Heuristic function (Manhattan distance)
+        function heuristic(posA, posB) {
+            return Math.abs(posA[0] - posB[0]) + Math.abs(posA[1] - posB[1]);
+        }
+
+        // Reconstruct the path from the cameFrom map
+        function reconstructPath(cameFrom, currentKey) {
+            const totalPath = [];
+            while (cameFrom.has(currentKey)) {
+                const [row, col] = currentKey.split(',').map(Number);
+                totalPath.unshift([row, col]);
+                currentKey = cameFrom.get(currentKey);
+            }
+            const [row, col] = currentKey.split(',').map(Number);
+            totalPath.unshift([row, col]);
+            return totalPath;
+        }
+
+        function findCharPosition(maze, char) {
+            for (let r = 0; r < maze.length; r++) {
+                for (let c = 0; c < maze[0].length; c++) {
+                    if (maze[r][c] === char) {
+                        return [r, c];
+                    }
+                }
+            }
+            return null;
+        }
+
+        // DRAWING ON CANVAS
+        function drawMaze(maze, solutionPath, visitedCells, openSetCells) {
+            if (cellSize < 1) {
+                return; // Do not draw if cells are too small
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const pathSet = new Set(solutionPath ? solutionPath.map(pos => `${pos[0]},${pos[1]}`) : []);
+            const visitedSet = visitedCells instanceof Map ? new Set(visitedCells.keys()) : visitedCells;
+            const openSetKeys = openSetCells instanceof Map ? new Set(openSetCells.keys()) : new Set();
+            
+            for (let r = 0; r < maze.length; r++) {
+                for (let c = 0; c < maze[0].length; c++) {
+                    const cell = maze[r][c];
+                    const posKey = `${r},${c}`;
+                    
+                    if (cell === 'W') {
+                        ctx.fillStyle = '#1f2937';
+                    } else if (cell === 'S') {
+                        ctx.fillStyle = '#22c55e';
+                    } else if (cell === 'E') {
+                        ctx.fillStyle = '#ef4444';
+                    } else if (pathSet.has(posKey)) {
+                        ctx.fillStyle = '#06b6d4';
+                    } else if (openSetKeys.has(posKey)) {
+                        ctx.fillStyle = '#fb923c';
+                    } else if (visitedSet && visitedSet.has(posKey)) {
+                        ctx.fillStyle = '#8b5cf6';
+                    } else {
+                        ctx.fillStyle = '#f3f4f6';
+                    }
+                    ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
+                }
+            }
+        }
+
+        window.onload = () => {
+             generateAndDraw();
+             updateFullscreenButtonText();
+        }
+    </script>
+</body>
+</html>
